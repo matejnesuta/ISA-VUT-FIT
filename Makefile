@@ -2,7 +2,7 @@ NAME        := dhcp-stats
 SRCS        := main.c 
 OBJS        := main.o 
 CC          :=	gcc	 
-CFLAGS      := -Wall -Wextra -pedantic -g -std=gnu99 
+CFLAGS      := -Wextra -pedantic -g -std=gnu99 -lpcap
 RM          := rm -f
 MAKEFLAGS   += --no-print-directory
 
