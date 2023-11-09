@@ -20,6 +20,15 @@ struct source {
     bool isInterface;
 };
 
+struct pool {
+    struct in_addr addr;
+    unsigned short mask;
+};
+
+struct pools {
+    struct pool* data;
+    size_t size;
+};
 // void print_packet_info(const u_char* packet, struct pcap_pkthdr
 // packet_header) {
 //     printf("Packet capture length: %d\n", packet_header.caplen);
@@ -73,11 +82,6 @@ void packet_handler(u_char* args,
     ip_header_length = ip_header_length * 4;
     // printf("IP header length (IHL) in bytes: %d\n", ip_header_length);
 
-    /* Now that we know where the IP header is, we can
-       inspect the IP header for a protocol number to
-       make sure it is TCP before going any further.
-       Protocol is always the 10th byte of the IP header */
-
     // TODO: tunelovani
     u_char protocol = *(ip_header + 9);
     if (protocol != IPPROTO_UDP) {
@@ -123,7 +127,11 @@ void helpAndExit() {
     exit(1);
 }
 
-void argparse(int argc, char* argv[], struct source* source) {
+void argparse(int argc,
+              char* argv[],
+              struct source* source,
+              struct pool** pools,
+              size_t* size) {
     if (argc < 4) {
         helpAndExit();
     } else if (!strcmp(argv[1], "-i")) {
@@ -143,6 +151,8 @@ void argparse(int argc, char* argv[], struct source* source) {
     char* arg = NULL;
     int mask = -1;
 
+    *size = 0;
+    struct pool* data = NULL;
     struct in_addr addr;
     for (int i = 3; i < argc; i++) {
         arg = argv[i];
@@ -163,8 +173,17 @@ void argparse(int argc, char* argv[], struct source* source) {
             (end != NULL && end[0] != '\0') || mask < 0 || mask > 32) {
             helpAndExit();
         }
+        data = realloc(data, (*size + 1) * sizeof(struct pool));
+        if (data == NULL) {
+            errprint("Failure related to memory allocation.");
+            exit(5);
+        }
+        data[*size].addr = addr;
+        data[*size].mask = mask;
+        (*size)++;
         printf("%s\n", argv[i]);
     }
+    *pools = data;
 }
 
 int main(int argc, char* argv[]) {
@@ -174,8 +193,20 @@ int main(int argc, char* argv[]) {
     int packet_count_limit = 0;
     struct source source;
     char error_buffer[PCAP_ERRBUF_SIZE];
+    struct pools pools;
+    struct pool* data = NULL;
+    size_t size;
+    pools.data = NULL;
 
-    argparse(argc, argv, &source);
+    argparse(argc, argv, &source, &data, &size);
+
+    pools.data = data;
+    pools.size = size;
+
+    // printf("%d\n", pools.size);
+    // printf("%d\n", pools.data[0].mask);
+    // printf("%d\n", pools.data[1].mask);
+    // printf("%d\n", pools.data[2].mask);
 
     if (source.isInterface == false) {
         pcap_t* pcap_open_offline(const char* fname, char* errbuf);
