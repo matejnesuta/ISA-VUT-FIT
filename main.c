@@ -11,6 +11,10 @@
 // https://linux.die.net/man/3/pcap_open_live
 // https://www.tcpdump.org/manpages/pcap.3pcap.html
 // https://man7.org/linux/man-pages/man3/inet_pton.3.html
+// https://www.geeksforgeeks.org/bit-fields-c/
+// https://stackoverflow.com/questions/22183561/how-to-compare-two-ip-address-in-c
+// https://datatracker.ietf.org/doc/html/rfc2131
+// https://datatracker.ietf.org/doc/html/rfc1533
 
 #define TIMEOUT 10000
 #define FILTER_EXPRESSION "port 67 or port 68"
@@ -20,9 +24,15 @@ struct source {
     bool isInterface;
 };
 
+struct bitArray {
+    char* bits;
+    size_t size;  // Size of the bit array in bytes
+};
+
 struct pool {
     struct in_addr addr;
     unsigned short mask;
+    struct bitArray allocation;
 };
 
 struct pools {
@@ -30,7 +40,6 @@ struct pools {
     size_t size;
 };
 // void print_packet_info(const u_char* packet, struct pcap_pkthdr
-// packet_header) {
 //     printf("Packet capture length: %d\n", packet_header.caplen);
 //     printf("Packet total length %d\n", packet_header.len);
 //     packet += 0;
@@ -40,13 +49,51 @@ void errprint(char* err) {
     fprintf(stderr, "%s", err);
 }
 
+char* createBitArray(size_t size) {
+    char* bits = NULL;
+    if (size != 0) {
+        bits = (char*)malloc(size * sizeof(char));
+        if (bits == NULL) {
+            errprint("malloc error\n");
+            exit(6);
+        }
+        for (size_t i = 0; i < size; i++) {
+            bits[i] = 0;
+        }
+    }
+    return bits;
+}
+
+void setBit(char* bits, size_t index) {
+    size_t byteIndex = index / 8;
+    size_t bitOffset = index % 8;
+    bits[byteIndex] |= (1 << bitOffset);
+}
+
+void parseDHCP(const u_char* payload, int payload_size) {
+    if (payload_size > 240) {
+        u_char* cookie = (u_char*)payload + 236;
+        int byte_count = 0;
+        if (cookie[0] != 99 || cookie[1] != 130 || cookie[2] != 83 ||
+            cookie[3] != 99) {
+            return;
+        }
+        u_char* type = cookie + 4;
+        if (*type == 53) {
+            if (type[2] == 5) {
+                printf("ACK %d.%d.%d.%d\n", payload[16], payload[17],
+                       payload[18], payload[19]);
+            }
+        }
+    }
+}
+
 void packet_handler(u_char* args,
                     const struct pcap_pkthdr* header,
                     const u_char* packet) {
     /* First, lets make sure we have an IP packet */
     struct ether_header* eth_header;
     eth_header = (struct ether_header*)packet;
-    // zde dodat 2. typ ethernetu
     if (ntohs(eth_header->ether_type) != ETHERTYPE_IP) {
         return;
     }
@@ -58,9 +105,6 @@ void packet_handler(u_char* args,
        total packet length even if it is larger
        than what we currently have captured. If the snapshot
        length set with pcap_open_live() is too small, you may
-       not have the whole packet. */
-    // printf("Total packet available: %d bytes\n", header->caplen);
-    // printf("Expected packet size: %d bytes\n", header->len);
 
     /* Pointers to start point of various headers */
     const u_char* ip_header;
@@ -80,7 +124,6 @@ void packet_handler(u_char* args,
     /* The IHL is number of 32-bit segments. Multiply
        by four to get a byte count for pointer arithmetic */
     ip_header_length = ip_header_length * 4;
-    // printf("IP header length (IHL) in bytes: %d\n", ip_header_length);
 
     // TODO: tunelovani
     u_char protocol = *(ip_header + 9);
@@ -91,21 +134,22 @@ void packet_handler(u_char* args,
     /* Add up all the header sizes to find the payload offset */
     int total_headers_size =
         ethernet_header_length + ip_header_length + udp_header_length;
-    // printf("Size of all headers combined: %d bytes\n", total_headers_size);
     payload_length = header->caplen - (ethernet_header_length +
                                        ip_header_length + udp_header_length);
-    // printf("Payload size: %d bytes\n", payload_length);
     payload = packet + total_headers_size;
     // printf("Memory address where payload begins: %p\n\n", payload);
 
     if (payload_length > 0) {
-        const u_char* temp_pointer = payload;
-        int byte_count = 0;
-        while (byte_count++ < payload_length) {
-            // printf("%02x", *temp_pointer);
-            temp_pointer++;
-        }
-        // printf("\n\n");
+        parseDHCP(payload, payload_length);
+        // printf("ahjo\n");
+
+        // const u_char* temp_pointer = payload;
+        // int byte_count = 0;
+        // while (byte_count++ < payload_length) {
+        //      printf("%02x", *temp_pointer);
+        //      temp_pointer++;
+        // }
+        //  printf("\n\n");
     }
 
     return;
@@ -135,10 +179,8 @@ void argparse(int argc,
     if (argc < 4) {
         helpAndExit();
     } else if (!strcmp(argv[1], "-i")) {
-        printf("interface: %s\n", argv[2]);
         source->isInterface = true;
     } else if (!strcmp(argv[1], "-r")) {
-        printf("file: %s\n", argv[2]);
         source->isInterface = false;
     } else {
         helpAndExit();
@@ -149,7 +191,7 @@ void argparse(int argc,
     char* prefix = NULL;
     char* end = NULL;
     char* arg = NULL;
-    int mask = -1;
+    unsigned short mask = 33;
 
     *size = 0;
     struct pool* data = NULL;
@@ -165,12 +207,9 @@ void argparse(int argc,
         if (ipaddr == NULL || prefix == NULL || end != NULL) {
             helpAndExit();
         }
-        printf("ip addr: %s\n", ipaddr);
-        printf("prefix: %s\n", prefix);
-        printf("end: %s\n", end);
         mask = strtol(prefix, &end, 10);
         if (inet_pton(AF_INET, ipaddr, &addr) <= 0 ||
-            (end != NULL && end[0] != '\0') || mask < 0 || mask > 32) {
+            (end != NULL && end[0] != '\0') || mask > 32) {
             helpAndExit();
         }
         data = realloc(data, (*size + 1) * sizeof(struct pool));
@@ -181,7 +220,10 @@ void argparse(int argc,
         data[*size].addr = addr;
         data[*size].mask = mask;
         (*size)++;
-        printf("%s\n", argv[i]);
+        size_t hosts = 1ul << (32 - mask);
+        data[*size].allocation.size = hosts < 8 ? 8 : hosts / 8;
+        data[*size].allocation.bits =
+            createBitArray(data[*size].allocation.size);
     }
     *pools = data;
 }
@@ -202,11 +244,6 @@ int main(int argc, char* argv[]) {
 
     pools.data = data;
     pools.size = size;
-
-    // printf("%d\n", pools.size);
-    // printf("%d\n", pools.data[0].mask);
-    // printf("%d\n", pools.data[1].mask);
-    // printf("%d\n", pools.data[2].mask);
 
     if (source.isInterface == false) {
         pcap_t* pcap_open_offline(const char* fname, char* errbuf);
