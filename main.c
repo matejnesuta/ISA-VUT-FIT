@@ -15,6 +15,7 @@
 // https://stackoverflow.com/questions/22183561/how-to-compare-two-ip-address-in-c
 // https://datatracker.ietf.org/doc/html/rfc2131
 // https://datatracker.ietf.org/doc/html/rfc1533
+// https://pubs.opengroup.org/onlinepubs/009695399/basedefs/netinet/in.h.html
 
 #define TIMEOUT 10000
 #define FILTER_EXPRESSION "port 67 or port 68"
@@ -70,7 +71,8 @@ void setBit(char* bits, size_t index) {
     bits[byteIndex] |= (1 << bitOffset);
 }
 
-void parseDHCP(const u_char* payload, int payload_size) {
+void parseDHCP(const u_char* payload, int payload_size, struct pools* pools) {
+    // printf("%lu\n", (*pools).size);
     if (payload_size > 240) {
         u_char* cookie = (u_char*)payload + 236;
         int byte_count = 0;
@@ -81,6 +83,8 @@ void parseDHCP(const u_char* payload, int payload_size) {
         u_char* type = cookie + 4;
         if (*type == 53) {
             if (type[2] == 5) {
+                uint32_t* yiaddr = (uint32_t*)(payload + 16);
+                printf("%u\n", ntohl(*yiaddr));
                 printf("ACK %d.%d.%d.%d\n", payload[16], payload[17],
                        payload[18], payload[19]);
             }
@@ -140,7 +144,7 @@ void packet_handler(u_char* args,
     // printf("Memory address where payload begins: %p\n\n", payload);
 
     if (payload_length > 0) {
-        parseDHCP(payload, payload_length);
+        parseDHCP(payload, payload_length, (struct pools*)args);
         // printf("ahjo\n");
 
         // const u_char* temp_pointer = payload;
@@ -217,13 +221,14 @@ void argparse(int argc,
             errprint("Failure related to memory allocation.");
             exit(5);
         }
+        printf("%u\n", ntohl(addr.s_addr));
         data[*size].addr = addr;
         data[*size].mask = mask;
-        (*size)++;
         size_t hosts = 1ul << (32 - mask);
-        data[*size].allocation.size = hosts < 8 ? 8 : hosts / 8;
+        data[*size].allocation.size = hosts < 8 ? 1 : hosts / 8;
         data[*size].allocation.bits =
             createBitArray(data[*size].allocation.size);
+        (*size)++;
     }
     *pools = data;
 }
@@ -272,7 +277,7 @@ int main(int argc, char* argv[]) {
         exit(2);
     }
 
-    pcap_loop(handle, 0, packet_handler, NULL);
+    pcap_loop(handle, 0, packet_handler, (u_char*)&pools);
     pcap_close(handle);
 
     return 0;
