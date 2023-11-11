@@ -90,6 +90,19 @@ uint32_t countTotalBits(struct bitArray arr) {
     return count;
 }
 
+u_char* findMessageTypeInOptions(u_char* options) {
+    while (*options != 255) {
+        if (*options == 53) {
+            return options;
+        } else {
+            options++;
+            options += *options + 1;
+        }
+    }
+    printf("\n");
+    return NULL;
+}
+
 void setBit(char* bits, size_t index, int set) {
     size_t byteIndex = index / 8;
     size_t bitOffset = index % 8;
@@ -120,8 +133,9 @@ void parseDHCP(const u_char* payload, int payload_size, struct pools* pools) {
             cookie[3] != 99) {
             return;
         }
-        u_char* type = cookie + 4;
-        if (*type == 53) {
+
+        u_char* type = findMessageTypeInOptions(cookie + 4);
+        if (type != NULL) {
             if (type[2] == 5) {
                 uint32_t* yiaddr = (uint32_t*)(payload + 16);
                 for (size_t i = 0; i < (*pools).size; i++) {
