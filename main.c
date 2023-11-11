@@ -16,6 +16,8 @@
 // https://datatracker.ietf.org/doc/html/rfc2131
 // https://datatracker.ietf.org/doc/html/rfc1533
 // https://pubs.opengroup.org/onlinepubs/009695399/basedefs/netinet/in.h.html
+// https://www.codementor.io/@hbendali/c-c-macro-bit-operations-ztrat0et6
+// https://www.geeksforgeeks.org/count-set-bits-in-an-integer/
 
 #define TIMEOUT 10000
 #define FILTER_EXPRESSION "port 67 or port 68"
@@ -32,7 +34,7 @@ struct bitArray {
 
 struct pool {
     struct in_addr addr;
-    unsigned short mask;
+    unsigned short prefix;
     struct bitArray allocation;
 };
 
@@ -65,10 +67,48 @@ char* createBitArray(size_t size) {
     return bits;
 }
 
-void setBit(char* bits, size_t index) {
+// https://stackoverflow.com/a/698108
+uint32_t countBitsInByte(char n) {
+    const unsigned char oneBits[] = {0, 1, 1, 2, 1, 2, 2, 3,
+                                     1, 2, 2, 3, 2, 3, 3, 4};
+
+    uint32_t result;
+
+    result = oneBits[n & 0x0f];
+    // printf("%u\n", result);
+    n = n >> 4;
+    result += oneBits[n & 0x0f];
+    // printf("%u\n", result);
+    return result;
+}
+
+uint32_t countTotalBits(struct bitArray arr) {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < arr.size; i++) {
+        count += countBitsInByte(arr.bits[i]);
+    }
+    return count;
+}
+
+void setBit(char* bits, size_t index, int set) {
     size_t byteIndex = index / 8;
     size_t bitOffset = index % 8;
-    bits[byteIndex] |= (1 << bitOffset);
+    // printf("index: %d\n", index);
+    // printf("byteIndex: %d\n", byteIndex);
+    // printf("offset: %d\n", bitOffset);
+    if (set) {
+        bits[byteIndex] |= (1 << bitOffset);
+    } else {
+        bits[byteIndex] &= ~(1 << bitOffset);
+    }
+}
+
+void compareIPV4s(u_int32_t host, struct pool* pool, int set) {
+    int64_t difference = (int64_t)(htonl(host) - htonl((*pool).addr.s_addr));
+    if (difference > 0 &&
+        difference < (int64_t)(1l << (32 - (*pool).prefix)) - 1) {
+        setBit((*pool).allocation.bits, difference, set);
+    }
 }
 
 void parseDHCP(const u_char* payload, int payload_size, struct pools* pools) {
@@ -84,9 +124,12 @@ void parseDHCP(const u_char* payload, int payload_size, struct pools* pools) {
         if (*type == 53) {
             if (type[2] == 5) {
                 uint32_t* yiaddr = (uint32_t*)(payload + 16);
-                printf("%u\n", ntohl(*yiaddr));
-                printf("ACK %d.%d.%d.%d\n", payload[16], payload[17],
-                       payload[18], payload[19]);
+                for (size_t i = 0; i < (*pools).size; i++) {
+                    compareIPV4s(*yiaddr, (*pools).data + i, 1);
+                }
+                // printf("%u\n", ntohl(*yiaddr));
+                // printf("ACK %d.%d.%d.%d\n", payload[16], payload[17],
+                //        payload[18], payload[19]);
             }
         }
     }
@@ -195,7 +238,7 @@ void argparse(int argc,
     char* prefix = NULL;
     char* end = NULL;
     char* arg = NULL;
-    unsigned short mask = 33;
+    unsigned short prefixInt = 33;
 
     *size = 0;
     struct pool* data = NULL;
@@ -211,9 +254,9 @@ void argparse(int argc,
         if (ipaddr == NULL || prefix == NULL || end != NULL) {
             helpAndExit();
         }
-        mask = strtol(prefix, &end, 10);
+        prefixInt = strtol(prefix, &end, 10);
         if (inet_pton(AF_INET, ipaddr, &addr) <= 0 ||
-            (end != NULL && end[0] != '\0') || mask > 32) {
+            (end != NULL && end[0] != '\0') || prefixInt > 32) {
             helpAndExit();
         }
         data = realloc(data, (*size + 1) * sizeof(struct pool));
@@ -221,10 +264,10 @@ void argparse(int argc,
             errprint("Failure related to memory allocation.");
             exit(5);
         }
-        printf("%u\n", ntohl(addr.s_addr));
+        // printf("%u\n", ntohl(addr.s_addr));
         data[*size].addr = addr;
-        data[*size].mask = mask;
-        size_t hosts = 1ul << (32 - mask);
+        data[*size].prefix = prefixInt;
+        size_t hosts = 1ul << (32 - prefixInt);
         data[*size].allocation.size = hosts < 8 ? 1 : hosts / 8;
         data[*size].allocation.bits =
             createBitArray(data[*size].allocation.size);
@@ -280,5 +323,18 @@ int main(int argc, char* argv[]) {
     pcap_loop(handle, 0, packet_handler, (u_char*)&pools);
     pcap_close(handle);
 
+    if (source.isInterface == false) {
+        printf("IP-Prefix Max-hosts Allocated addresses Utilization\n");
+        for (size_t i = 0; i < pools.size; i++) {
+            printf("%s/%u ", inet_ntoa(pools.data[i].addr),
+                   pools.data[i].prefix);
+            size_t hosts = (1ul << (32 - pools.data[i].prefix)) - 2;
+            printf("%u ", hosts);
+            size_t allocation = countTotalBits(pools.data[i].allocation);
+            printf("%u ", allocation);
+            printf("%.2f%%", 100.0 * ((float)allocation / (float)hosts));
+            printf("\n");
+        }
+    }
     return 0;
 }
