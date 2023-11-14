@@ -90,16 +90,17 @@ uint32_t countTotalBits(struct bitArray arr) {
     return count;
 }
 
-u_char* findMessageTypeInOptions(u_char* options) {
+u_char* findOptionInOptions(u_char* options, int option_type) {
     while (*options != 255) {
-        if (*options == 53) {
+        if (*options == option_type) {
             return options;
-        } else {
+        } else if (*options != 0) {
             options++;
             options += *options + 1;
+        } else {
+            options++;
         }
     }
-    printf("\n");
     return NULL;
 }
 
@@ -116,34 +117,58 @@ void setBit(char* bits, size_t index, int set) {
     }
 }
 
+// compare 2 IPV4s in network order
 void compareIPV4s(u_int32_t host, struct pool* pool, int set) {
-    int64_t difference = (int64_t)(htonl(host) - htonl((*pool).addr.s_addr));
+    int64_t difference = (int64_t)(host - ((*pool).addr.s_addr));
     if (difference > 0 &&
         difference < (int64_t)(1l << (32 - (*pool).prefix)) - 1) {
         setBit((*pool).allocation.bits, difference, set);
     }
 }
 
-void parseDHCP(const u_char* payload, int payload_size, struct pools* pools) {
-    // printf("%lu\n", (*pools).size);
-    if (payload_size > 240) {
-        u_char* cookie = (u_char*)payload + 236;
-        int byte_count = 0;
-        if (cookie[0] != 99 || cookie[1] != 130 || cookie[2] != 83 ||
-            cookie[3] != 99) {
-            return;
-        }
+u_char* checkSnameAndBootfile(u_char* options,
+                              int option_type,
+                              int overload_type) {
+    u_char* type = NULL;
+    switch (overload_type) {
+        case 1:
+            type = findOptionInOptions(options + 44 + 64, 53);
+            break;
+        case 2:
+            type = findOptionInOptions(options + 44, 53);
+            break;
+        case 3:
+            type = findOptionInOptions(options + 44, 53);
+            if (type == NULL) {
+                type = findOptionInOptions(options + 44 + 64, 53);
+            }
+            break;
+    }
+    return type;
+}
 
-        u_char* type = findMessageTypeInOptions(cookie + 4);
-        if (type != NULL) {
-            if (type[2] == 5) {
-                uint32_t* yiaddr = (uint32_t*)(payload + 16);
-                for (size_t i = 0; i < (*pools).size; i++) {
-                    compareIPV4s(*yiaddr, (*pools).data + i, 1);
-                }
-                // printf("%u\n", ntohl(*yiaddr));
-                // printf("ACK %d.%d.%d.%d\n", payload[16], payload[17],
-                //        payload[18], payload[19]);
+void parseDHCP(const u_char* payload, int payload_size, struct pools* pools) {
+    u_char* cookie = (u_char*)payload + 236;
+    if (cookie[0] != 99 || cookie[1] != 130 || cookie[2] != 83 ||
+        cookie[3] != 99) {
+        return;
+    }
+
+    u_char* type = findOptionInOptions(cookie + 4, 53);
+    u_char* overload = NULL;
+    if (type == NULL) {
+        overload = findOptionInOptions(cookie + 4, 52);
+    }
+
+    if (overload != NULL) {
+        type = checkSnameAndBootfile((u_char*)payload, 53, overload[2]);
+    }
+
+    if (type != NULL) {
+        if (type[2] == 5) {
+            uint32_t* yiaddr = (uint32_t*)(payload + 16);
+            for (size_t i = 0; i < (*pools).size; i++) {
+                compareIPV4s(htonl(*yiaddr), (*pools).data + i, 1);
             }
         }
     }
@@ -198,19 +223,9 @@ void packet_handler(u_char* args,
     payload_length = header->caplen - (ethernet_header_length +
                                        ip_header_length + udp_header_length);
     payload = packet + total_headers_size;
-    // printf("Memory address where payload begins: %p\n\n", payload);
 
-    if (payload_length > 0) {
+    if (payload_length > 241) {
         parseDHCP(payload, payload_length, (struct pools*)args);
-        // printf("ahjo\n");
-
-        // const u_char* temp_pointer = payload;
-        // int byte_count = 0;
-        // while (byte_count++ < payload_length) {
-        //      printf("%02x", *temp_pointer);
-        //      temp_pointer++;
-        // }
-        //  printf("\n\n");
     }
 
     return;
@@ -279,6 +294,7 @@ void argparse(int argc,
             exit(5);
         }
         // printf("%u\n", ntohl(addr.s_addr));
+        addr.s_addr = (htonl(addr.s_addr) >> 32 - prefixInt) << 32 - prefixInt;
         data[*size].addr = addr;
         data[*size].prefix = prefixInt;
         size_t hosts = 1ul << (32 - prefixInt);
@@ -340,6 +356,7 @@ int main(int argc, char* argv[]) {
     if (source.isInterface == false) {
         printf("IP-Prefix Max-hosts Allocated addresses Utilization\n");
         for (size_t i = 0; i < pools.size; i++) {
+            pools.data[i].addr.s_addr = htonl(pools.data[i].addr.s_addr);
             printf("%s/%u ", inet_ntoa(pools.data[i].addr),
                    pools.data[i].prefix);
             size_t hosts = (1ul << (32 - pools.data[i].prefix)) - 2;
