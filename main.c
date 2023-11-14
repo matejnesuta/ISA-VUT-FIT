@@ -1,10 +1,13 @@
+#include <ncurses.h>
 #include <netinet/if_ether.h>
 #include <netinet/in.h>
 #include <pcap.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 
 // sources
 // https://www.devdungeon.com/content/using-libpcap-c
@@ -18,13 +21,16 @@
 // https://pubs.opengroup.org/onlinepubs/009695399/basedefs/netinet/in.h.html
 // https://www.codementor.io/@hbendali/c-c-macro-bit-operations-ztrat0et6
 // https://www.geeksforgeeks.org/count-set-bits-in-an-integer/
+// https://stackoverflow.com/questions/44084793/handle-signals-in-ncurses
+// https://www.gnu.org/software/libc/manual/html_node/Syslog-Example.html
 
-#define TIMEOUT 10000
 #define FILTER_EXPRESSION "port 67 or port 68"
 
+static volatile sig_atomic_t interrupted = 0;
+
 struct source {
-    char* name;
     bool isInterface;
+    char* name;
 };
 
 struct bitArray {
@@ -33,20 +39,20 @@ struct bitArray {
 };
 
 struct pool {
+    bool syslog_sent;
+    struct bitArray allocation;
     struct in_addr addr;
     unsigned short prefix;
-    struct bitArray allocation;
 };
 
 struct pools {
     struct pool* data;
     size_t size;
 };
-// void print_packet_info(const u_char* packet, struct pcap_pkthdr
-//     printf("Packet capture length: %d\n", packet_header.caplen);
-//     printf("Packet total length %d\n", packet_header.len);
-//     packet += 0;
-// }
+
+pcap_t* handle = NULL;
+struct source source;
+struct pools pools;
 
 void errprint(char* err) {
     fprintf(stderr, "%s", err);
@@ -75,10 +81,8 @@ uint32_t countBitsInByte(char n) {
     uint32_t result;
 
     result = oneBits[n & 0x0f];
-    // printf("%u\n", result);
     n = n >> 4;
     result += oneBits[n & 0x0f];
-    // printf("%u\n", result);
     return result;
 }
 
@@ -107,9 +111,6 @@ u_char* findOptionInOptions(u_char* options, int option_type) {
 void setBit(char* bits, size_t index, int set) {
     size_t byteIndex = index / 8;
     size_t bitOffset = index % 8;
-    // printf("index: %d\n", index);
-    // printf("byteIndex: %d\n", byteIndex);
-    // printf("offset: %d\n", bitOffset);
     if (set) {
         bits[byteIndex] |= (1 << bitOffset);
     } else {
@@ -147,7 +148,7 @@ u_char* checkSnameAndBootfile(u_char* options,
     return type;
 }
 
-void parseDHCP(const u_char* payload, int payload_size, struct pools* pools) {
+void parseDHCP(const u_char* payload, int payload_size) {
     u_char* cookie = (u_char*)payload + 236;
     if (cookie[0] != 99 || cookie[1] != 130 || cookie[2] != 83 ||
         cookie[3] != 99) {
@@ -167,17 +168,54 @@ void parseDHCP(const u_char* payload, int payload_size, struct pools* pools) {
     if (type != NULL) {
         if (type[2] == 5) {
             uint32_t* yiaddr = (uint32_t*)(payload + 16);
-            for (size_t i = 0; i < (*pools).size; i++) {
-                compareIPV4s(htonl(*yiaddr), (*pools).data + i, 1);
+            for (size_t i = 0; i < pools.size; i++) {
+                compareIPV4s(htonl(*yiaddr), pools.data + i, 1);
             }
         }
     }
+}
+
+void closeAndExit(int exit_code) {
+    if (source.isInterface == true) {
+        endwin();
+    }
+    exit(exit_code);
+}
+
+void handle_signal(int signal) {
+    if (signal == SIGINT) {
+        closeAndExit(0);
+    }
+}
+
+void notifySyslog(char* ip, int prefix) {
+    syslog(LOG_NOTICE, "prefix %s/%d exceeded 50%% of allocations", ip, prefix);
+    printf("prefix %s/%d exceeded 50%% of allocations\n", ip, prefix);
+}
+
+void printOnline() {
+    mvprintw(0, 0, "IP-Prefix Max-hosts Allocated addresses Utilization\n");
+    for (size_t i = 0; i < pools.size; i++) {
+        struct in_addr addr;
+        addr.s_addr = htonl(pools.data[i].addr.s_addr);
+        size_t hosts = (1ul << (32 - pools.data[i].prefix)) - 2;
+        size_t allocation = countTotalBits(pools.data[i].allocation);
+        float percentage = 100.0 * ((float)allocation / (float)hosts);
+        mvprintw(i + 1, 0, "%s/%u %u %u %.2f%%", inet_ntoa(addr),
+                 pools.data[i].prefix, hosts, allocation, percentage);
+        if (percentage > 50.00 && pools.data[i].syslog_sent == false) {
+            pools.data[i].syslog_sent = true;
+            notifySyslog(inet_ntoa(addr), pools.data[i].prefix);
+        }
+    }
+    refresh();
 }
 
 void packet_handler(u_char* args,
                     const struct pcap_pkthdr* header,
                     const u_char* packet) {
     /* First, lets make sure we have an IP packet */
+
     struct ether_header* eth_header;
     eth_header = (struct ether_header*)packet;
     if (ntohs(eth_header->ether_type) != ETHERTYPE_IP) {
@@ -225,10 +263,12 @@ void packet_handler(u_char* args,
     payload = packet + total_headers_size;
 
     if (payload_length > 241) {
-        parseDHCP(payload, payload_length, (struct pools*)args);
+        parseDHCP(payload, payload_length);
     }
 
-    return;
+    if (source.isInterface == true) {
+        printOnline(pools);
+    }
 }
 
 void helpAndExit() {
@@ -247,21 +287,17 @@ void helpAndExit() {
     exit(1);
 }
 
-void argparse(int argc,
-              char* argv[],
-              struct source* source,
-              struct pool** pools,
-              size_t* size) {
+void argparse(int argc, char* argv[], struct pool** pools, size_t* size) {
     if (argc < 4) {
         helpAndExit();
     } else if (!strcmp(argv[1], "-i")) {
-        source->isInterface = true;
+        source.isInterface = true;
     } else if (!strcmp(argv[1], "-r")) {
-        source->isInterface = false;
+        source.isInterface = false;
     } else {
         helpAndExit();
     }
-    source->name = *(argv + 2);
+    source.name = *(argv + 2);
 
     char* ipaddr = NULL;
     char* prefix = NULL;
@@ -294,6 +330,7 @@ void argparse(int argc,
             exit(5);
         }
         // printf("%u\n", ntohl(addr.s_addr));
+        data[*size].syslog_sent = false;
         addr.s_addr = (htonl(addr.s_addr) >> 32 - prefixInt) << 32 - prefixInt;
         data[*size].addr = addr;
         data[*size].prefix = prefixInt;
@@ -307,18 +344,17 @@ void argparse(int argc,
 }
 
 int main(int argc, char* argv[]) {
+    setlogmask(LOG_UPTO(LOG_NOTICE));
+    openlog("dhcp-stats", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
     const u_char* packet = NULL;
     struct pcap_pkthdr packet_header;
-    pcap_t* handle = NULL;
     int packet_count_limit = 0;
-    struct source source;
     char error_buffer[PCAP_ERRBUF_SIZE];
-    struct pools pools;
     struct pool* data = NULL;
     size_t size;
     pools.data = NULL;
 
-    argparse(argc, argv, &source, &data, &size);
+    argparse(argc, argv, &data, &size);
 
     pools.data = data;
     pools.size = size;
@@ -327,13 +363,15 @@ int main(int argc, char* argv[]) {
         pcap_t* pcap_open_offline(const char* fname, char* errbuf);
         handle = pcap_open_offline(source.name, error_buffer);
     } else {
-        handle = pcap_open_live(source.name, BUFSIZ, packet_count_limit,
-                                TIMEOUT, error_buffer);
+        handle = pcap_open_live(source.name, BUFSIZ, 0, 100, error_buffer);
+        initscr();
+        printOnline(&pools);
+        signal(SIGINT, handle_signal);
     }
 
     if (handle == NULL) {
         errprint(error_buffer);
-        exit(2);
+        closeAndExit(2);
     }
 
     struct bpf_program filter;
@@ -349,6 +387,8 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Error setting filter - %s\n", pcap_geterr(handle));
         exit(2);
     }
+
+    pcap_set_immediate_mode(handle, 1);
 
     pcap_loop(handle, 0, packet_handler, (u_char*)&pools);
     pcap_close(handle);
@@ -366,6 +406,8 @@ int main(int argc, char* argv[]) {
             printf("%.2f%%", 100.0 * ((float)allocation / (float)hosts));
             printf("\n");
         }
+    } else {
+        endwin();
     }
     return 0;
 }
