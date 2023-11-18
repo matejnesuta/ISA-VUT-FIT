@@ -8,8 +8,8 @@
 #include <string.h>
 #include <syslog.h>
 
-struct source source;
 struct pools pools;
+struct source source;
 
 char* createBitArray(size_t size) {
     char* bits = NULL;
@@ -138,6 +138,38 @@ void helpAndExit() {
 void notifySyslog(char* ip, int prefix) {
     syslog(LOG_NOTICE, "prefix %s/%d exceeded 50%% of allocations", ip, prefix);
     printf("prefix %s/%d exceeded 50%% of allocations\n", ip, prefix);
+}
+
+void printOffline() {
+    printf("IP-Prefix Max-hosts Allocated addresses Utilization\n");
+    for (size_t i = 0; i < pools.size; i++) {
+        pools.data[i].addr.s_addr = htonl(pools.data[i].addr.s_addr);
+        printf("%s/%u ", inet_ntoa(pools.data[i].addr), pools.data[i].prefix);
+        size_t hosts = (1ul << (32 - pools.data[i].prefix)) - 2;
+        printf("%u ", hosts);
+        size_t allocation = countTotalBits(pools.data[i].allocation);
+        printf("%u ", allocation);
+        printf("%.2f%%", 100.0 * ((float)allocation / (float)hosts));
+        printf("\n");
+    }
+}
+
+void printOnline() {
+    mvprintw(0, 0, "IP-Prefix Max-hosts Allocated addresses Utilization\n");
+    for (size_t i = 0; i < pools.size; i++) {
+        struct in_addr addr;
+        addr.s_addr = htonl(pools.data[i].addr.s_addr);
+        size_t hosts = (1ul << (32 - pools.data[i].prefix)) - 2;
+        size_t allocation = countTotalBits(pools.data[i].allocation);
+        float percentage = 100.0 * ((float)allocation / (float)hosts);
+        mvprintw(i + 1, 0, "%s/%u %u %u %.2f%%", inet_ntoa(addr),
+                 pools.data[i].prefix, hosts, allocation, percentage);
+        if (percentage > 50.00 && pools.data[i].syslog_sent == false) {
+            pools.data[i].syslog_sent = true;
+            notifySyslog(inet_ntoa(addr), pools.data[i].prefix);
+        }
+    }
+    refresh();
 }
 
 void setBit(char* bits, size_t index, int set) {

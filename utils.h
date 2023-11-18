@@ -28,6 +28,9 @@ struct pools {
     size_t size;
 };
 
+struct source;
+struct pools;
+
 char* createBitArray(size_t);
 uint32_t countBitsInByte(char n);
 uint32_t countTotalBits(struct bitArray);
@@ -37,6 +40,8 @@ void errprint(char*);
 void handle_signal(int);
 void helpAndExit();
 void notifySyslog(char*, int);
+void printOffline();
+void printOnline();
 void setBit(char*, size_t, int);
 
 #endif
