@@ -1,6 +1,6 @@
 NAME        := dhcp-stats 
-SRCS        := main.c 
-OBJS        := main.o 
+SRCS        := main.c utils.c 
+OBJS        := main.o utils.o
 CC          :=	gcc	 
 CFLAGS      := -Wextra -pedantic -g -std=gnu99 -lpcap -lncurses
 RM          := rm -f

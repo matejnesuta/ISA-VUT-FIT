@@ -9,6 +9,8 @@
 #include <string.h>
 #include <syslog.h>
 
+#include "utils.h"
+
 // sources
 // https://www.devdungeon.com/content/using-libpcap-c
 // https://linux.die.net/man/3/pcap_open_live
@@ -24,98 +26,32 @@
 // https://stackoverflow.com/questions/44084793/handle-signals-in-ncurses
 // https://www.gnu.org/software/libc/manual/html_node/Syslog-Example.html
 
-#define FILTER_EXPRESSION "port 67 or port 68"
-
-static volatile sig_atomic_t interrupted = 0;
-
-struct source {
-    bool isInterface;
-    char* name;
-};
-
-struct bitArray {
-    char* bits;
-    size_t size;  // Size of the bit array in bytes
-};
-
-struct pool {
-    bool syslog_sent;
-    struct bitArray allocation;
-    struct in_addr addr;
-    unsigned short prefix;
-};
-
-struct pools {
-    struct pool* data;
-    size_t size;
-};
+#define FILTER_EXPRESSION "port 68"
 
 pcap_t* handle = NULL;
-struct source source;
-struct pools pools;
+extern struct source source;
+extern struct pools pools;
 
-void errprint(char* err) {
-    fprintf(stderr, "%s", err);
-}
-
-char* createBitArray(size_t size) {
-    char* bits = NULL;
-    if (size != 0) {
-        bits = (char*)malloc(size * sizeof(char));
-        if (bits == NULL) {
-            errprint("malloc error\n");
-            exit(6);
-        }
-        for (size_t i = 0; i < size; i++) {
-            bits[i] = 0;
-        }
-    }
-    return bits;
-}
-
-// https://stackoverflow.com/a/698108
-uint32_t countBitsInByte(char n) {
-    const unsigned char oneBits[] = {0, 1, 1, 2, 1, 2, 2, 3,
-                                     1, 2, 2, 3, 2, 3, 3, 4};
-
-    uint32_t result;
-
-    result = oneBits[n & 0x0f];
-    n = n >> 4;
-    result += oneBits[n & 0x0f];
-    return result;
-}
-
-uint32_t countTotalBits(struct bitArray arr) {
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < arr.size; i++) {
-        count += countBitsInByte(arr.bits[i]);
-    }
-    return count;
-}
-
-u_char* findOptionInOptions(u_char* options, int option_type) {
+u_char* findOptionInOptions(u_char* options,
+                            int option_type,
+                            u_char* payload_end) {
     while (*options != 255) {
         if (*options == option_type) {
             return options;
+        } else if (options + 1 >= payload_end) {
+            break;
         } else if (*options != 0) {
             options++;
-            options += *options + 1;
+            if ((options + *options + 1) < payload_end) {
+                options += *options + 1;
+            } else {
+                break;
+            }
         } else {
             options++;
         }
     }
     return NULL;
-}
-
-void setBit(char* bits, size_t index, int set) {
-    size_t byteIndex = index / 8;
-    size_t bitOffset = index % 8;
-    if (set) {
-        bits[byteIndex] |= (1 << bitOffset);
-    } else {
-        bits[byteIndex] &= ~(1 << bitOffset);
-    }
 }
 
 // compare 2 IPV4s in network order
@@ -127,21 +63,22 @@ void compareIPV4s(u_int32_t host, struct pool* pool, int set) {
     }
 }
 
-u_char* checkSnameAndBootfile(u_char* options,
+u_char* checkSnameAndBootfile(u_char* payload,
                               int option_type,
                               int overload_type) {
     u_char* type = NULL;
     switch (overload_type) {
         case 1:
-            type = findOptionInOptions(options + 44 + 64, 53);
+            type = findOptionInOptions(payload + 44 + 64, 53, payload + 236);
             break;
         case 2:
-            type = findOptionInOptions(options + 44, 53);
+            type = findOptionInOptions(payload + 44, 53, payload + 108);
             break;
         case 3:
-            type = findOptionInOptions(options + 44, 53);
+            type = findOptionInOptions(payload + 44, 53, payload + 108);
             if (type == NULL) {
-                type = findOptionInOptions(options + 44 + 64, 53);
+                type =
+                    findOptionInOptions(payload + 44 + 64, 53, payload + 236);
             }
             break;
     }
@@ -155,10 +92,12 @@ void parseDHCP(const u_char* payload, int payload_size) {
         return;
     }
 
-    u_char* type = findOptionInOptions(cookie + 4, 53);
+    u_char* type =
+        findOptionInOptions(cookie + 4, 53, (u_char*)payload + payload_size);
     u_char* overload = NULL;
     if (type == NULL) {
-        overload = findOptionInOptions(cookie + 4, 52);
+        overload = findOptionInOptions(cookie + 4, 52,
+                                       (u_char*)payload + payload_size);
     }
 
     if (overload != NULL) {
@@ -173,24 +112,6 @@ void parseDHCP(const u_char* payload, int payload_size) {
             }
         }
     }
-}
-
-void closeAndExit(int exit_code) {
-    if (source.isInterface == true) {
-        endwin();
-    }
-    exit(exit_code);
-}
-
-void handle_signal(int signal) {
-    if (signal == SIGINT) {
-        closeAndExit(0);
-    }
-}
-
-void notifySyslog(char* ip, int prefix) {
-    syslog(LOG_NOTICE, "prefix %s/%d exceeded 50%% of allocations", ip, prefix);
-    printf("prefix %s/%d exceeded 50%% of allocations\n", ip, prefix);
 }
 
 void printOnline() {
@@ -215,9 +136,10 @@ void packet_handler(u_char* args,
                     const struct pcap_pkthdr* header,
                     const u_char* packet) {
     /* First, lets make sure we have an IP packet */
-
     struct ether_header* eth_header;
     eth_header = (struct ether_header*)packet;
+    int ethernet_header_length = 14; /* Doesn't change */
+
     if (ntohs(eth_header->ether_type) != ETHERTYPE_IP) {
         return;
     }
@@ -235,7 +157,6 @@ void packet_handler(u_char* args,
     const u_char* payload;
 
     /* Header lengths in bytes */
-    int ethernet_header_length = 14; /* Doesn't change */
     int ip_header_length;
     int udp_header_length = 8;
     int payload_length;
@@ -271,78 +192,6 @@ void packet_handler(u_char* args,
     }
 }
 
-void helpAndExit() {
-    errprint("Wrong args detected.\n");
-    printf(
-        "\n./dhcp-stats [-r <filename>] [-i <interface-name>] <ip-prefix> [ "
-        "<ip-prefix> [ ... ] ]\n"
-        "-r <filename> - pcap file to be used\n"
-        "-i <interface> - interface to listen on\n\n"
-
-        "<ip-prefix> - subnet to generate a statistic upon\n\n"
-
-        "For example:\n"
-        "./dhcp-stats -i eth0 192.168.1.0/24 192.168.0.0/22 "
-        "172.16.32.0/24\n\n");
-    exit(1);
-}
-
-void argparse(int argc, char* argv[], struct pool** pools, size_t* size) {
-    if (argc < 4) {
-        helpAndExit();
-    } else if (!strcmp(argv[1], "-i")) {
-        source.isInterface = true;
-    } else if (!strcmp(argv[1], "-r")) {
-        source.isInterface = false;
-    } else {
-        helpAndExit();
-    }
-    source.name = *(argv + 2);
-
-    char* ipaddr = NULL;
-    char* prefix = NULL;
-    char* end = NULL;
-    char* arg = NULL;
-    unsigned short prefixInt = 33;
-
-    *size = 0;
-    struct pool* data = NULL;
-    struct in_addr addr;
-    for (int i = 3; i < argc; i++) {
-        arg = argv[i];
-        if (strchr(arg, '/') != strrchr(arg, '/')) {
-            helpAndExit();
-        }
-        ipaddr = strtok(arg, "/");
-        prefix = strtok(NULL, "/");
-        end = strtok(NULL, "/");
-        if (ipaddr == NULL || prefix == NULL || end != NULL) {
-            helpAndExit();
-        }
-        prefixInt = strtol(prefix, &end, 10);
-        if (inet_pton(AF_INET, ipaddr, &addr) <= 0 ||
-            (end != NULL && end[0] != '\0') || prefixInt > 32) {
-            helpAndExit();
-        }
-        data = realloc(data, (*size + 1) * sizeof(struct pool));
-        if (data == NULL) {
-            errprint("Failure related to memory allocation.");
-            exit(5);
-        }
-        // printf("%u\n", ntohl(addr.s_addr));
-        data[*size].syslog_sent = false;
-        addr.s_addr = (htonl(addr.s_addr) >> 32 - prefixInt) << 32 - prefixInt;
-        data[*size].addr = addr;
-        data[*size].prefix = prefixInt;
-        size_t hosts = 1ul << (32 - prefixInt);
-        data[*size].allocation.size = hosts < 8 ? 1 : hosts / 8;
-        data[*size].allocation.bits =
-            createBitArray(data[*size].allocation.size);
-        (*size)++;
-    }
-    *pools = data;
-}
-
 int main(int argc, char* argv[]) {
     setlogmask(LOG_UPTO(LOG_NOTICE));
     openlog("dhcp-stats", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
@@ -367,6 +216,8 @@ int main(int argc, char* argv[]) {
         initscr();
         printOnline(&pools);
         signal(SIGINT, handle_signal);
+        signal(SIGQUIT, handle_signal);
+        signal(SIGTERM, handle_signal);
     }
 
     if (handle == NULL) {
