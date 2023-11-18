@@ -43,5 +43,6 @@ void notifySyslog(char*, int);
 void printOffline();
 void printOnline();
 void setBit(char*, size_t, int);
+void validatePrefixAndIP(char*, struct in_addr*, unsigned short*);
 
 #endif

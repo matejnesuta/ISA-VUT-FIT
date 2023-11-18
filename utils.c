@@ -47,6 +47,25 @@ uint32_t countTotalBits(struct bitArray arr) {
     return count;
 }
 
+void allocatePool(struct pool** data,
+                  size_t size,
+                  struct in_addr addr,
+                  unsigned short prefix) {
+    *data = realloc(*data, (size + 1) * sizeof(struct pool));
+    if (data == NULL) {
+        errprint("Failure related to memory allocation.");
+        exit(5);
+    }
+    (*data)[size].syslog_sent = false;
+    addr.s_addr = (htonl(addr.s_addr) >> 32 - prefix) << 32 - prefix;
+    (*data)[size].addr = addr;
+    (*data)[size].prefix = prefix;
+    size_t hosts = 1ul << (32 - prefix);
+    (*data)[size].allocation.size = hosts < 8 ? 1 : hosts / 8;
+    (*data)[size].allocation.bits =
+        createBitArray((*data)[size].allocation.size);
+}
+
 void argparse(int argc, char* argv[], struct pool** pools, size_t* size) {
     if (argc < 4) {
         helpAndExit();
@@ -59,44 +78,13 @@ void argparse(int argc, char* argv[], struct pool** pools, size_t* size) {
     }
     source.name = *(argv + 2);
 
-    char* ipaddr = NULL;
-    char* prefix = NULL;
-    char* end = NULL;
-    char* arg = NULL;
-    unsigned short prefixInt = 33;
-
     *size = 0;
     struct pool* data = NULL;
-    struct in_addr addr;
     for (int i = 3; i < argc; i++) {
-        arg = argv[i];
-        if (strchr(arg, '/') != strrchr(arg, '/')) {
-            helpAndExit();
-        }
-        ipaddr = strtok(arg, "/");
-        prefix = strtok(NULL, "/");
-        end = strtok(NULL, "/");
-        if (ipaddr == NULL || prefix == NULL || end != NULL) {
-            helpAndExit();
-        }
-        prefixInt = strtol(prefix, &end, 10);
-        if (inet_pton(AF_INET, ipaddr, &addr) <= 0 ||
-            (end != NULL && end[0] != '\0') || prefixInt > 32) {
-            helpAndExit();
-        }
-        data = realloc(data, (*size + 1) * sizeof(struct pool));
-        if (data == NULL) {
-            errprint("Failure related to memory allocation.");
-            exit(5);
-        }
-        data[*size].syslog_sent = false;
-        addr.s_addr = (htonl(addr.s_addr) >> 32 - prefixInt) << 32 - prefixInt;
-        data[*size].addr = addr;
-        data[*size].prefix = prefixInt;
-        size_t hosts = 1ul << (32 - prefixInt);
-        data[*size].allocation.size = hosts < 8 ? 1 : hosts / 8;
-        data[*size].allocation.bits =
-            createBitArray(data[*size].allocation.size);
+        unsigned short prefix;
+        struct in_addr addr;
+        validatePrefixAndIP(argv[i], &addr, &prefix);
+        allocatePool(&data, *size, addr, prefix);
         (*size)++;
     }
     *pools = data;
@@ -179,5 +167,25 @@ void setBit(char* bits, size_t index, int set) {
         bits[byteIndex] |= (1 << bitOffset);
     } else {
         bits[byteIndex] &= ~(1 << bitOffset);
+    }
+}
+
+void validatePrefixAndIP(char* arg,
+                         struct in_addr* addr,
+                         unsigned short* prefix) {
+    *prefix = 33;
+    if (strchr(arg, '/') != strrchr(arg, '/')) {
+        helpAndExit();
+    }
+    char* ipaddr = strtok(arg, "/");
+    char* prefixStr = strtok(NULL, "/");
+    char* end = strtok(NULL, "/");
+    if (ipaddr == NULL || prefixStr == NULL || end != NULL) {
+        helpAndExit();
+    }
+    *prefix = strtol(prefixStr, &end, 10);
+    if (inet_pton(AF_INET, ipaddr, addr) <= 0 ||
+        (end != NULL && end[0] != '\0') || *prefix > 32) {
+        helpAndExit();
     }
 }
