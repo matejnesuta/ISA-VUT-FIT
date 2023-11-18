@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pcap.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 
 struct pools pools;
 struct source source;
+pcap_t* handle;
 
 char* createBitArray(size_t size) {
     char* bits = NULL;
@@ -90,10 +92,19 @@ void argparse(int argc, char* argv[], struct pool** pools, size_t* size) {
     *pools = data;
 }
 
+void freePool() {
+    for (size_t i = 0; i < pools.size; i++) {
+        free(pools.data[i].allocation.bits);
+    }
+    free(pools.data);
+}
+
 void closeAndExit(int exit_code) {
     if (source.isInterface == true) {
         endwin();
     }
+    freePool();
+    pcap_close(handle);
     exit(exit_code);
 }
 

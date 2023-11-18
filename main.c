@@ -28,7 +28,7 @@
 
 extern struct pools pools;
 extern struct source source;
-pcap_t* handle = NULL;
+extern pcap_t* handle;
 
 int main(int argc, char* argv[]) {
     setlogmask(LOG_UPTO(LOG_NOTICE));
@@ -72,12 +72,12 @@ int main(int argc, char* argv[]) {
     pcap_set_immediate_mode(handle, 1);
 
     pcap_loop(handle, 0, packet_handler, (u_char*)&pools);
-    pcap_close(handle);
 
     if (source.isInterface == false) {
         printOffline();
     } else {
         endwin();
     }
+    closeAndExit();
     return 0;
 }

@@ -37,6 +37,7 @@ uint32_t countTotalBits(struct bitArray);
 void argparse(int, char*[], struct pool**, size_t*);
 void closeAndExit();
 void errprint(char*);
+void freePool();
 void handle_signal(int);
 void helpAndExit();
 void notifySyslog(char*, int);
