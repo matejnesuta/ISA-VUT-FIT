@@ -1,3 +1,7 @@
+/**
+ * Author: Matej Nesuta
+ * Login: xnesut00
+ **/
 #include <ncurses.h>
 #include <pcap.h>
 #include <signal.h>
@@ -30,6 +34,8 @@ extern struct pools pools;
 extern struct source source;
 extern pcap_t* handle;
 
+// Parts of this main function are from this tutorial:
+// https://www.devdungeon.com/content/using-libpcap-c.
 int main(int argc, char* argv[]) {
     setlogmask(LOG_UPTO(LOG_NOTICE));
     openlog("dhcp-stats", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);

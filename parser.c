@@ -1,3 +1,7 @@
+/**
+ * Author: Matej Nesuta
+ * Login: xnesut00
+ **/
 #include "parser.h"
 #include "utils.h"
 
@@ -8,6 +12,8 @@
 extern struct pools pools;
 extern struct source source;
 
+// If DHCP overload (option 52) is present, this function is called to search
+// for option 53 in sname/bootfile/both.
 u_char* checkSnameAndBootfile(u_char* payload,
                               int option_type,
                               int overload_type) {
@@ -30,6 +36,8 @@ u_char* checkSnameAndBootfile(u_char* payload,
     return type;
 }
 
+// This function is used to look for specific option either in the option field,
+// or in sname/bootfile.
 u_char* findOptionInOptions(u_char* options,
                             int option_type,
                             u_char* payload_end) {
@@ -52,7 +60,7 @@ u_char* findOptionInOptions(u_char* options,
     return NULL;
 }
 
-// compare 2 IPV4s in network order
+// This function compares 2 IPV4s in a network order.
 void compareIPV4s(u_int32_t host, struct pool* pool, int set) {
     int64_t difference = (int64_t)(host - ((*pool).addr.s_addr));
     if (difference > 0 &&
@@ -62,10 +70,12 @@ void compareIPV4s(u_int32_t host, struct pool* pool, int set) {
     return;
 }
 
+// This function was made using this tutorial:
+// https://www.devdungeon.com/content/using-libpcap-c. It is called upon arrival
+// of every packet.
 void packet_handler(u_char* args,
                     const struct pcap_pkthdr* header,
                     const u_char* packet) {
-    /* First, lets make sure we have an IP packet */
     struct ether_header* eth_header;
     eth_header = (struct ether_header*)packet;
     int ethernet_header_length = 14; /* Doesn't change */
@@ -73,40 +83,18 @@ void packet_handler(u_char* args,
     if (ntohs(eth_header->ether_type) != ETHERTYPE_IP) {
         return;
     }
-
-    /* The total packet length, including all headers
-       and the data payload is stored in
-       header->len and header->caplen. Caplen is
-       the amount actually available, and len is the
-       total packet length even if it is larger
-       than what we currently have captured. If the snapshot
-       length set with pcap_open_live() is too small, you may
-
-    /* Pointers to start point of various headers */
     const u_char* ip_header;
     const u_char* payload;
-
-    /* Header lengths in bytes */
     int ip_header_length;
     int udp_header_length = 8;
     int payload_length;
-
-    /* Find start of IP header */
     ip_header = packet + ethernet_header_length;
-    /* The second-half of the first byte in ip_header
-       contains the IP header length (IHL). */
     ip_header_length = ((*ip_header) & 0x0F);
-    /* The IHL is number of 32-bit segments. Multiply
-       by four to get a byte count for pointer arithmetic */
     ip_header_length = ip_header_length * 4;
-
-    // TODO: tunelovani
     u_char protocol = *(ip_header + 9);
     if (protocol != IPPROTO_UDP) {
         return;
     }
-
-    /* Add up all the header sizes to find the payload offset */
     int total_headers_size =
         ethernet_header_length + ip_header_length + udp_header_length;
     payload_length = header->caplen - (ethernet_header_length +
@@ -122,26 +110,34 @@ void packet_handler(u_char* args,
     }
 }
 
+// This function is called when possible DHCP message was found.
 void parseDHCP(const u_char* payload, int payload_size) {
+    // DHCP cookie check.
     u_char* cookie = (u_char*)payload + 236;
     if (cookie[0] != 99 || cookie[1] != 130 || cookie[2] != 83 ||
         cookie[3] != 99) {
         return;
     }
 
+    // Firstly, we want to search for option 53 in options.
     u_char* type =
         findOptionInOptions(cookie + 4, 53, (u_char*)payload + payload_size);
     u_char* overload = NULL;
+    // If option 53 is not found, we search for option 52.
     if (type == NULL) {
         overload = findOptionInOptions(cookie + 4, 52,
                                        (u_char*)payload + payload_size);
     }
 
+    // If option 52 was found, we continue the search in sname/bootfile.
+    // Otherwise, the message is discarded.
     if (overload != NULL) {
         type = checkSnameAndBootfile((u_char*)payload, 53, overload[2]);
     }
 
     if (type != NULL) {
+        // If ACK message is found, search through every network pool is done to
+        // check if yiaddr belongs to any of these pools.
         if (type[2] == 5) {
             uint32_t* yiaddr = (uint32_t*)(payload + 16);
             for (size_t i = 0; i < pools.size; i++) {

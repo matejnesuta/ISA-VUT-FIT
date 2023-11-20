@@ -1,3 +1,7 @@
+/**
+ * Author: Matej Nesuta
+ * Login: xnesut00
+ **/
 #ifndef __UTILS_H__
 #define __UTILS_H__
 #include <ncurses.h>

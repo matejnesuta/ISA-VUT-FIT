@@ -1,3 +1,7 @@
+/**
+ * Author: Matej Nesuta
+ * Login: xnesut00
+ **/
 #include "utils.h"
 
 #include <arpa/inet.h>
@@ -9,10 +13,17 @@
 #include <string.h>
 #include <syslog.h>
 
+// Global variable for the main struct, which contains all the necessary data.
 struct pools pools;
+// Global variable which indicates if a pcap file is being read or a network
+// interface is used.
 struct source source;
+// Handle used by pcap to open specific pcap file or interface.
 pcap_t* handle;
 
+// Function, which is responsible for allocating storage for a single network
+// pool. For example, /24 prefix will get 8 bytes upon allocation and each bit
+// represents an address in that network pool.
 char* createBitArray(size_t size) {
     char* bits = NULL;
     if (size != 0) {
@@ -28,13 +39,12 @@ char* createBitArray(size_t size) {
     return bits;
 }
 
-// https://stackoverflow.com/a/698108
+// This was made using this anwser: https://stackoverflow.com/a/698108. This
+// functions counts number of bits, which are set to 1, in a byte.
 uint32_t countBitsInByte(char n) {
     const unsigned char oneBits[] = {0, 1, 1, 2, 1, 2, 2, 3,
                                      1, 2, 2, 3, 2, 3, 3, 4};
-
     uint32_t result;
-
     result = oneBits[n & 0x0f];
     n = n >> 4;
     result += oneBits[n & 0x0f];
@@ -49,6 +59,9 @@ uint32_t countTotalBits(struct bitArray arr) {
     return count;
 }
 
+// This function is called upon argument parsing and it's purpose is to allocate
+// a struct for single pool and also fill the member of that struct with
+// relevant variables.
 void allocatePool(struct pool** data,
                   size_t size,
                   struct in_addr addr,
@@ -68,6 +81,8 @@ void allocatePool(struct pool** data,
         createBitArray((*data)[size].allocation.size);
 }
 
+// This function is responsible for checking the flags and arguments when
+// running this program.
 void argparse(int argc, char* argv[], struct pool** pools, size_t* size) {
     if (argc < 4) {
         helpAndExit();
@@ -92,6 +107,8 @@ void argparse(int argc, char* argv[], struct pool** pools, size_t* size) {
     *pools = data;
 }
 
+// This function frees a struct associated with a network pool and also it's bit
+// field.
 void freePool() {
     for (size_t i = 0; i < pools.size; i++) {
         free(pools.data[i].allocation.bits);
@@ -99,6 +116,8 @@ void freePool() {
     free(pools.data);
 }
 
+// This is called before exiting to close the ncurses window (if opened) and to
+// free the allocated memory.
 void closeAndExit(int exit_code) {
     if (source.isInterface == true) {
         endwin();
@@ -118,6 +137,7 @@ void handle_signal(int signal) {
     }
 }
 
+// This is called when invalid args or flags are detected.
 void helpAndExit() {
     errprint("Wrong args detected.\n");
     printf(
@@ -139,6 +159,7 @@ void notifySyslog(char* ip, int prefix) {
     printf("prefix %s/%d exceeded 50%% of allocations\n", ip, prefix);
 }
 
+// This is called after a pcap file is parsed.
 void printOffline() {
     printf("IP-Prefix Max-hosts Allocated addresses Utilization\n");
     for (size_t i = 0; i < pools.size; i++) {
@@ -153,6 +174,7 @@ void printOffline() {
     }
 }
 
+// This is called upon every new packet on the interface to refresh the screen.
 void printOnline() {
     mvprintw(0, 0, "IP-Prefix Max-hosts Allocated addresses Utilization\n");
     for (size_t i = 0; i < pools.size; i++) {
@@ -171,6 +193,8 @@ void printOnline() {
     refresh();
 }
 
+// This code is taken from this quick tutorial on macros in C:
+// https://www.codementor.io/@hbendali/c-c-macro-bit-operations-ztrat0et6.
 void setBit(char* bits, size_t index, int set) {
     size_t byteIndex = index / 8;
     size_t bitOffset = index % 8;
@@ -181,6 +205,7 @@ void setBit(char* bits, size_t index, int set) {
     }
 }
 
+// Quick check if the prefix and IP are valid or not.
 void validatePrefixAndIP(char* arg,
                          struct in_addr* addr,
                          unsigned short* prefix) {

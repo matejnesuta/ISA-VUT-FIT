@@ -1,3 +1,7 @@
+/**
+ * Author: Matej Nesuta
+ * Login: xnesut00
+ **/
 #ifndef __PARSER_H__
 #define __PARSER_H__
 
