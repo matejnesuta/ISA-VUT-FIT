@@ -72,7 +72,7 @@ void allocatePool(struct pool** data,
         exit(5);
     }
     (*data)[size].syslog_sent = false;
-    addr.s_addr = (htonl(addr.s_addr) >> 32 - prefix) << 32 - prefix;
+    addr.s_addr = (htonl(addr.s_addr) >> (32 - prefix)) << (32 - prefix);
     (*data)[size].addr = addr;
     (*data)[size].prefix = prefix;
     size_t hosts = 1ul << (32 - prefix);
@@ -166,9 +166,9 @@ void printOffline() {
         pools.data[i].addr.s_addr = htonl(pools.data[i].addr.s_addr);
         printf("%s/%u ", inet_ntoa(pools.data[i].addr), pools.data[i].prefix);
         size_t hosts = (1ul << (32 - pools.data[i].prefix)) - 2;
-        printf("%u ", hosts);
+        printf("%lu ", hosts);
         size_t allocation = countTotalBits(pools.data[i].allocation);
-        printf("%u ", allocation);
+        printf("%lu ", allocation);
         printf("%.2f%%", 100.0 * ((float)allocation / (float)hosts));
         printf("\n");
     }

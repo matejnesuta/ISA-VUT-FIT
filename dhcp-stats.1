@@ -1,0 +1,30 @@
+.TH DHCP-STATS 1
+.SH NAME
+dhcp-stats \- simple monitoring tool to allow observing of a DHCP pool utillization
+.SH SYNOPSIS
+.B dhcp
+[\fB\-r\fR \fIFILENAME\fR]
+[\fB\-i\fR \fIINTERFACE\fR]
+.IR <ip-prefix> [ <ip-prefix> [ ... ]]
+.SH DESCRIPTION
+.B dhcp-stats
+is a simple program, which aim is to monitor the DHCP traffic on a certain interface or a .pcap file.
+The program is also also able to show the utilization of monitored DHCP pools.
+When used on an interface, the program behaves like a console application, running until a kill signal is sent, refreshing the stats upon every new packet arrival on the interface.
+The program also sends a syslog message when a certain DHCP pool gets allocated to 50% or more.
+.PP
+When used on the .pcap file, the program parses the whole file and results are sent to the stdout once the parsing is finished.
+.PP
+Either a file, or an interface must be supplied.
+
+.SH OPTIONS
+.B -r
+\fIFILENAME\fR Sets the .pcap file for an analysis in the offline mode.
+.PP
+.B -i
+\fIINTERFACE\fR Sets the interface for an analysis in the online mode.
+.PP
+.B ip-prefix 
+.PP
+Sets a pool given by a network address and a mask prefix for monitoring (eg. 192.168.0.0/24 will monitor pool for 254 hosts with the network address of 192.168.0.0). 
+When a non-network address is supplied (for example 192.168.0.30/24), the address is sliced by the network mask (resulting in the value 192.168.0.0/24).

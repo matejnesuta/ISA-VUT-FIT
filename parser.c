@@ -20,16 +20,19 @@ u_char* checkSnameAndBootfile(u_char* payload,
     u_char* type = NULL;
     switch (overload_type) {
         case 1:
-            type = findOptionInOptions(payload + 44 + 64, 53, payload + 236);
+            type = findOptionInOptions(payload + 44 + 64, option_type,
+                                       payload + 236);
             break;
         case 2:
-            type = findOptionInOptions(payload + 44, 53, payload + 108);
+            type =
+                findOptionInOptions(payload + 44, option_type, payload + 108);
             break;
         case 3:
-            type = findOptionInOptions(payload + 44, 53, payload + 108);
+            type =
+                findOptionInOptions(payload + 44, option_type, payload + 108);
             if (type == NULL) {
-                type =
-                    findOptionInOptions(payload + 44 + 64, 53, payload + 236);
+                type = findOptionInOptions(payload + 44 + 64, option_type,
+                                           payload + 236);
             }
             break;
     }
@@ -76,6 +79,7 @@ void compareIPV4s(u_int32_t host, struct pool* pool, int set) {
 void packet_handler(u_char* args,
                     const struct pcap_pkthdr* header,
                     const u_char* packet) {
+    args = NULL;
     struct ether_header* eth_header;
     eth_header = (struct ether_header*)packet;
     int ethernet_header_length = 14; /* Doesn't change */
